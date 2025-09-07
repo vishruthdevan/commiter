@@ -5,7 +5,7 @@ from .main import app
 
 def main():
     """Main entry point for the commit command."""
-    return app()
+    return app(prog_name="commiter")
 
 if __name__ == "__main__":
     sys.exit(main())
