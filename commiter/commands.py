@@ -128,10 +128,12 @@ class CommitCommand:
                 return []
 
             # Generate messages using LLM with a spinner/status
-            with console.status(
-                "[bold blue]Generating commit message options...[/bold blue]",
-                spinner="dots",
-            ):
+            status_text = (
+                "[bold blue]Generating commit message...[/bold blue]"
+                if max_choices <= 1
+                else "[bold blue]Generating commit message options...[/bold blue]"
+            )
+            with console.status(status_text, spinner="dots"):
                 messages = self.llm.generate_commit_messages(diff_content, max_choices)
             return messages
 
