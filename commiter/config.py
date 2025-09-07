@@ -12,13 +12,13 @@ class CommiterConfig:
     """Configuration for the commiter CLI."""
     
     # Behavior settings
-    interactive_mode: bool = True
-    auto_commit: bool = False
+    interactive_mode: bool = False  # Default to auto-commit mode
     max_choices: int = 3
     
-    # AI settings (for future use)
-    ai_provider: str = "placeholder"
-    ai_model: str = "placeholder"
+    # LLM settings
+    llm_provider: str = "ollama"
+    llm_model: str = "llama3.2"
+    llm_base_url: str = "http://localhost:11434"
     
     # Git settings
     git_editor: Optional[str] = None
