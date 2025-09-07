@@ -1,95 +1,159 @@
 """Interactive CLI functionality for commit message selection."""
 
-from typing import List, Optional
+import textwrap
+from typing import Any, List, Optional, cast
+
+from InquirerPy import inquirer as _inquirer
+from rich.box import ROUNDED
 from rich.console import Console
-from rich.prompt import Prompt, Confirm
 from rich.panel import Panel
-from rich.text import Text
+from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
+from .git_operations import GitOperations
+
 console = Console()
+# Workaround for type-checkers: InquirerPy exposes dynamic factories like select()
+inquirer = cast(Any, _inquirer)
 
 
 def display_commit_choices(messages: List[str]) -> int:
     """
     Display commit message choices and return the selected index.
-    
+
     Args:
         messages: List of commit message options
-        
+
     Returns:
         Index of selected message (0-based)
     """
-    console.print("\n[bold blue]Choose a commit message:[/bold blue]\n")
-    
-    # Create a table for better formatting
-    table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("Option", style="cyan", width=6)
-    table.add_column("Message", style="white")
-    
-    for i, message in enumerate(messages, 1):
-        table.add_row(str(i), message)
-    
-    console.print(table)
-    
-    # Get user choice
-    while True:
-        try:
-            choice = Prompt.ask(
-                f"\n[bold]Select option (1-{len(messages)})",
-                default="1"
-            )
-            
-            choice_num = int(choice)
-            if 1 <= choice_num <= len(messages):
-                return choice_num - 1  # Convert to 0-based index
-            else:
-                console.print(f"[red]Please enter a number between 1 and {len(messages)}[/red]")
-        except ValueError:
-            console.print("[red]Please enter a valid number[/red]")
+    console.print(
+        Panel.fit(
+            "Use arrow keys to navigate, Enter to select",
+            title="Choose a commit message",
+            border_style="blue",
+        )
+    )
+
+    # Build choices for InquirerPy (truncate long lines nicely)
+    choices = []
+    for idx, msg in enumerate(messages):
+        display = textwrap.shorten(
+            msg, width=100, break_long_words=False, placeholder="…"
+        )
+        choices.append({"name": f"{idx + 1}. {display}", "value": idx})
+
+    try:
+        selected_index = inquirer.select(
+            message="Select a commit message",
+            choices=choices,
+            default=0,
+            instruction="Use ↑/↓ to navigate, Enter to select",
+            pointer="❯",
+            qmark="›",
+            cycle=True,
+            max_height=12,
+        ).execute()
+        return int(selected_index)
+    except Exception:
+        # Fallback to simple numeric input if InquirerPy fails
+        table = Table(show_header=True, header_style="bold magenta", box=ROUNDED)
+        table.add_column("Option", style="cyan", width=6)
+        table.add_column("Message", style="white")
+        for i, message in enumerate(messages, 1):
+            table.add_row(str(i), message)
+        console.print(table)
+
+        while True:
+            try:
+                choice = Prompt.ask(
+                    f"\n[bold]Select option (1-{len(messages)})", default="1"
+                )
+                choice_num = int(choice)
+                if 1 <= choice_num <= len(messages):
+                    return choice_num - 1
+                else:
+                    console.print(
+                        f"[red]Please enter a number between 1 and {len(messages)}[/red]"
+                    )
+            except ValueError:
+                console.print("[red]Please enter a valid number[/red]")
 
 
 def display_git_status() -> None:
     """Display current git status for context."""
     import subprocess
-    
+
     try:
-        # Get staged files
+        # Ensure we are in a git repository
+        if not GitOperations.check_git_repo():
+            console.print("[red]Not in a git repository[/red]")
+            return
+
+        # Use name-status for robust parsing of staged files
         result = subprocess.run(
-            ["git", "status", "--porcelain", "--cached"],
+            ["git", "diff", "--cached", "--name-status"],
             capture_output=True,
             text=True,
-            check=True
+            check=False,
         )
-        
+
         staged_files = []
-        for line in result.stdout.strip().split('\n'):
-            if line and line[0] in 'AMDR':
-                status = line[0]
-                filename = line[3:].strip()
+        for raw_line in result.stdout.strip().split("\n"):
+            if not raw_line:
+                continue
+            parts = raw_line.split("\t")
+            status_token = parts[0]
+            status = status_token[0] if status_token else "?"
+            filename = parts[-1].strip() if len(parts) >= 2 else ""
+            if status in "AMDR" and filename:
                 staged_files.append((status, filename))
-        
+
+        if result.returncode != 0 and not staged_files:
+            err = result.stderr.strip() if result.stderr else ""
+            console.print(
+                f"[red]Error getting git status[/red]{f': {err}' if err else ''}"
+            )
+            return
+
         if staged_files:
-            console.print("\n[bold green]Staged changes:[/bold green]")
+            table = Table(show_header=True, header_style="bold magenta", box=ROUNDED)
+            table.add_column("Status", style="cyan", width=8)
+            table.add_column("File", style="white")
+
             for status, filename in staged_files:
                 status_color = {
-                    'A': 'green',
-                    'M': 'yellow', 
-                    'D': 'red',
-                    'R': 'blue'
-                }.get(status, 'white')
-                
-                status_symbol = {
-                    'A': '+',
-                    'M': '~',
-                    'D': '-',
-                    'R': '→'
-                }.get(status, '?')
-                
-                console.print(f"  [{status_color}]{status_symbol}[/{status_color}] {filename}")
+                    "A": "green",
+                    "M": "yellow",
+                    "D": "red",
+                    "R": "blue",
+                }.get(status, "white")
+
+                status_symbol = {"A": "+", "M": "~", "D": "-", "R": "→"}.get(
+                    status, "?"
+                )
+
+                table.add_row(
+                    f"[{status_color}]{status_symbol}[/{status_color}] {status}",
+                    filename,
+                )
+
+            console.print(
+                Panel.fit(
+                    table,
+                    title=f"Staged changes ({len(staged_files)})",
+                    border_style="green",
+                )
+            )
         else:
-            console.print("\n[yellow]No staged changes found[/yellow]")
-            
+            console.print(
+                Panel.fit(
+                    "No staged changes found",
+                    title="Staged changes",
+                    border_style="yellow",
+                )
+            )
+
     except subprocess.CalledProcessError:
         console.print("[red]Error getting git status[/red]")
     except FileNotFoundError:
@@ -98,21 +162,21 @@ def display_git_status() -> None:
 
 def confirm_commit(message: str) -> bool:
     """Ask user to confirm the commit with the selected message."""
-    console.print(f"\n[bold]Commit message:[/bold]")
-    console.print(Panel(message, border_style="blue"))
-    
-    return Confirm.ask("\n[bold]Proceed with this commit message?")
+    console.print("\n[bold]Commit message:[/bold]")
+    console.print(Panel.fit(message, border_style="blue", title="Commit message"))
+
+    return Confirm.ask("\n[bold]Proceed with this commit message?[/bold]", default=True)
 
 
 def ask_for_custom_message() -> Optional[str]:
     """Ask user to enter a custom commit message."""
     console.print("\n[bold blue]Enter custom commit message:[/bold blue]")
     message = Prompt.ask("Message", default="")
-    
+
     if not message.strip():
         console.print("[yellow]Empty message, skipping custom input[/yellow]")
         return None
-    
+
     return message.strip()
 
 
@@ -147,5 +211,5 @@ This tool helps you create git commits with AI-generated messages.
   commit --amend           # Pass --amend to git
   commit -m "message"      # Pass -m to git directly
 """
-    
+
     console.print(Panel(help_text, title="Help", border_style="green"))
